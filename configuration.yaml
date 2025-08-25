@@ -1,0 +1,660 @@
+
+## Quick Start
+1) Copy these files into your HA config folder (or a test instance).  
+2) Update entity IDs if yours differ (climate, sensors, weather).  
+3) Restart HA or reload Template/Automation.  
+4) Use the **sliders** on your Lovelace dashboard to tune setpoints per zone.
+
+See the bottom of this README for Lovelace dashboard snippets.
+"""
+
+(configuration := base / "configuration.yaml").write_text(textwrap.dedent("""
+# ────────────────────────────────────────────────────────────────────────────────
+# Home Assistant base config pieces for Smart HVAC repo
+# Adds per-zone setpoint sliders and includes the split YAML files.
+# ────────────────────────────────────────────────────────────────────────────────
+
+# Helpers (sliders) for per-zone setpoints; tweak live from the UI
+input_number:
+  zone1_heat_set_c:
+    name: Zone 1 Heat Setpoint (°C)
+    min: 17
+    max: 22
+    step: 0.1
+    mode: box
+    initial: 20.0        # 68.0°F
+  zone1_cool_set_c:
+    name: Zone 1 Cool Setpoint (°C)
+    min: 21
+    max: 26
+    step: 0.1
+    mode: box
+    initial: 24.0        # 75.2°F
+  zone2_heat_set_c:
+    name: Zone 2 Heat Setpoint (°C)
+    min: 17
+    max: 22
+    step: 0.1
+    mode: box
+    initial: 19.5        # 67.1°F
+  zone2_cool_set_c:
+    name: Zone 2 Cool Setpoint (°C)
+    min: 21
+    max: 26
+    step: 0.1
+    mode: box
+    initial: 23.5        # 74.3°F
+
+# Split files
+sensor: !include includes/sensors.yaml
+binary_sensor: !include includes/binarysensor.yaml
+
+# If you keep derivative in its own file:
+# (statistics platform is in sensors.yaml already; derivative here)
+"""))
+
+# sensors.yaml (OWM + template sensors + dew points)
+(inc / "sensors.yaml").write_text(textwrap.dedent("""
+# ────────────────────────────────────────────────────────────────────────────────
+# sensors.yaml
+# - OpenWeatherMap REST pull (metric)
+# - Indoor templates (weighted Zone 1, master avg)
+# - Dew points for Zone 1 and Zone 2
+# - Display-only °F conversions (optional)
+# - Statistics sensors for trends
+# ────────────────────────────────────────────────────────────────────────────────
+
+# ===== OpenWeatherMap via REST =====
+- platform: rest
+  name: "OpenWeatherMap Data"
+  resource: "https://api.openweathermap.org/data/2.5/weather?lat=43.150603&lon=-123.393732&units=metric&appid=YOUR_OWM_API_KEY"
+  scan_interval: 300
+  timeout: 10
+  value_template: >-
+    {% if value_json is defined and value_json.main is defined and value_json.main.temp is defined %}
+      {{ value_json.main.temp }}
+    {% else %}
+      {{ states('sensor.outdoor_temperature_owm') | float(20) }}
+    {% endif %}
+  json_attributes:
+    - main
+    - weather
+    - clouds
+    - wind
+    - visibility
+    - sys
+
+# ===== Template Sensors =====
+- platform: template
+  sensors:
+
+    # --- Outdoor from OWM (metric control baseline) ---
+    outdoor_temperature_owm:
+      friendly_name: "Outdoor Temperature (OWM)"
+      unit_of_measurement: "°C"
+      value_template: "{{ state_attr('sensor.openweathermap_data', 'main').temp | float(20) }}"
+
+    outdoor_temperature_owm_f:
+      friendly_name: "Outdoor Temperature (OWM) (F)"
+      unit_of_measurement: "°F"
+      value_template: "{{ (states('sensor.outdoor_temperature_owm') | float * 1.8 + 32) | round(1) }}"
+
+    outdoor_condition_owm:
+      friendly_name: "Outdoor Condition (OWM)"
+      value_template: "{{ state_attr('sensor.openweathermap_data', 'weather')[0].description | title }}"
+
+    cloud_coverage_owm:
+      friendly_name: "Cloud Coverage (OWM)"
+      unit_of_measurement: "%"
+      value_template: "{{ state_attr('sensor.openweathermap_data', 'clouds').all | int(0) }}"
+
+    wind_speed_owm:
+      friendly_name: "Wind Speed (OWM)"
+      unit_of_measurement: "mph"
+      value_template: "{{ (state_attr('sensor.openweathermap_data','wind').speed | float(0) * 2.237) | round(1) }}"
+
+    humidity_owm:
+      friendly_name: "Outdoor Humidity (OWM)"
+      unit_of_measurement: "%"
+      value_template: "{{ state_attr('sensor.openweathermap_data','main').humidity | int(0) }}"
+
+    visibility_owm:
+      friendly_name: "Visibility (OWM)"
+      unit_of_measurement: "km"
+      value_template: "{{ (state_attr('sensor.openweathermap_data','visibility') | float(0) / 1000) | round(1) }}"
+
+    sunrise_time:
+      friendly_name: "Sunrise Time"
+      value_template: "{{ as_timestamp(state_attr('sensor.openweathermap_data','sys').sunrise) | timestamp_custom('%H:%M') }}"
+
+    sunset_time:
+      friendly_name: "Sunset Time"
+      value_template: "{{ as_timestamp(state_attr('sensor.openweathermap_data','sys').sunset) | timestamp_custom('%H:%M') }}"
+
+    # --- Indoor sensors (assumes you already publish these) ---
+    master_bedroom_temperature:
+      friendly_name: "Master Bedroom Temperature"
+      value_template: "{{ states('sensor.master_bedroom_temperature') | float(21) }}"
+    master_bedroom_temperature_two:
+      friendly_name: "Master Bedroom Temperature Two"
+      value_template: "{{ states('sensor.master_bedroom_temperature_two') | float(21) }}"
+    master_bedroom_temperature_three:
+      friendly_name: "Master Bedroom Temperature Three"
+      value_template: "{{ states('sensor.master_bedroom_temperature_three') | float(states('sensor.master_bedroom_temperature_two') | float(21)) }}"
+    master_bedroom_humidity:
+      friendly_name: "Master Bedroom Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.master_bedroom_humidity') | int(50) }}"
+
+    middle_room_temperature:
+      friendly_name: "Middle Room Temperature"
+      value_template: "{{ states('sensor.middle_room_temperature') | float(21) }}"
+    middle_room_humidity:
+      friendly_name: "Middle Room Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.middle_room_humidity') | int(50) }}"
+
+    spare_room_temperature:
+      friendly_name: "Spare Room Temperature"
+      value_template: "{{ states('sensor.spare_room_temperature') | float(21) }}"
+    spare_room_humidity:
+      friendly_name: "Spare Room Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.spare_room_humidity') | int(50) }}"
+
+    living_room_temperature:
+      friendly_name: "Living Room Temperature"
+      value_template: "{{ states('sensor.living_room_temperature') | float(21) }}"
+    living_room_humidity:
+      friendly_name: "Living Room Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.living_room_humidity') | int(50) }}"
+
+    dining_room_temperature:
+      friendly_name: "Dining Room Temperature"
+      value_template: "{{ states('sensor.dining_room_temperature') | float(21) }}"
+    dining_room_humidity:
+      friendly_name: "Dining Room Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.dining_room_humidity') | int(50) }}"
+
+    kitchen_temperature:
+      friendly_name: "Kitchen Temperature"
+      value_template: "{{ states('sensor.kitchen_temperature') | float(21) }}"
+    kitchen_humidity:
+      friendly_name: "Kitchen Humidity"
+      unit_of_measurement: "%"
+      value_template: "{{ states('sensor.kitchen_humidity') | int(50) }}"
+
+    # --- Master avg (3 sensors if present) ---
+    master_bedroom_average_temperature:
+      friendly_name: "Master Bedroom Average Temperature"
+      value_template: >-
+        {% set t1 = states('sensor.master_bedroom_temperature') | float(21) %}
+        {% set t2 = states('sensor.master_bedroom_temperature_two') | float(21) %}
+        {% set t3 = states('sensor.master_bedroom_temperature_three') | float(21) %}
+        {{ ((t1 + t2 + t3) / 3) | round(1) }}
+
+    # --- Zone 1 weighted (Kitchen 40%, Living 40%, Dining 20%) ---
+    zone1_temperature_weighted:
+      friendly_name: "Zone 1 Weighted Temp"
+      unit_of_measurement: "°C"
+      value_template: >-
+        {% set k = states('sensor.kitchen_temperature') | float(21) %}
+        {% set l = states('sensor.living_room_temperature') | float(21) %}
+        {% set d = states('sensor.dining_room_temperature') | float(21) %}
+        {{ ((k * 0.40) + (l * 0.40) + (d * 0.20)) | round(2) }}
+    zone1_humidity_weighted:
+      friendly_name: "Zone 1 Weighted Humidity"
+      unit_of_measurement: "%"
+      value_template: >-
+        {% set k = states('sensor.kitchen_humidity') | int(50) %}
+        {% set l = states('sensor.living_room_humidity') | int(50) %}
+        {% set d = states('sensor.dining_room_humidity') | int(50) %}
+        {{ ((k * 0.40) + (l * 0.40) + (d * 0.20)) | round(0) }}
+
+    # --- House average humidity ---
+    average_humidity:
+      friendly_name: "Average Humidity"
+      unit_of_measurement: "%"
+      value_template: >-
+        {% set sensors = [
+          states('sensor.master_bedroom_humidity') | float(50),
+          states('sensor.middle_room_humidity') | float(50),
+          states('sensor.spare_room_humidity') | float(50),
+          states('sensor.living_room_humidity') | float(50),
+          states('sensor.dining_room_humidity') | float(50),
+          states('sensor.kitchen_humidity') | float(50)
+        ] %}
+        {{ ((sensors | sum) / (sensors | count)) | round(1) }}
+
+# ===== Dew Point sensors (Magnus formula) =====
+- platform: template
+  sensors:
+    zone1_dew_point_c:
+      friendly_name: "Zone 1 Dew Point (°C)"
+      unit_of_measurement: "°C"
+      value_template: >-
+        {% set T = states('sensor.zone1_temperature_weighted') | float(21) %}
+        {% set RH = states('sensor.zone1_humidity_weighted') | float(50) %}
+        {% set a = 17.62 %}{% set b = 243.12 %}
+        {% set gamma = ((a*T)/(b+T)) + log(RH/100) %}
+        {{ (b*gamma)/(a-gamma) | round(1) }}
+
+    zone2_dew_point_c:
+      friendly_name: "Zone 2 Dew Point (°C)"
+      unit_of_measurement: "°C"
+      value_template: >-
+        {% set Tm = states('sensor.master_bedroom_average_temperature') | float(21) %}
+        {% set Tmid = states('sensor.middle_room_temperature') | float(21) %}
+        {% set Ts = states('sensor.spare_room_temperature') | float(21) %}
+        {% set T = ((Tm + Tmid + Ts) / 3) %}
+        {% set RHm = states('sensor.master_bedroom_humidity') | float(50) %}
+        {% set RHmid = states('sensor.middle_room_humidity') | float(50) %}
+        {% set RHs = states('sensor.spare_room_humidity') | float(50) %}
+        {% set RH = ((RHm + RHmid + RHs) / 3) %}
+        {% set a = 17.62 %}{% set b = 243.12 %}
+        {% set gamma = ((a*T)/(b+T)) + log(RH/100) %}
+        {{ (b*gamma)/(a-gamma) | round(1) }}
+
+# ===== Statistics (trends) =====
+- platform: statistics
+  name: "Kitchen Temperature Trend"
+  entity_id: sensor.kitchen_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+
+- platform: statistics
+  name: "Dining Room Temperature Trend"
+  entity_id: sensor.dining_room_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+
+- platform: statistics
+  name: "Living Room Temperature Trend"
+  entity_id: sensor.living_room_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+
+- platform: statistics
+  name: "Master Bedroom Temperature Trend"
+  entity_id: sensor.master_bedroom_average_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+
+- platform: statistics
+  name: "Middle Room Temperature Trend"
+  entity_id: sensor.middle_room_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+
+- platform: statistics
+  name: "Spare Room Temperature Trend"
+  entity_id: sensor.spare_room_temperature
+  state_characteristic: mean
+  sampling_size: 10
+  max_age:
+    minutes: 60
+"""))
+
+# binarysensor.yaml
+(inc / "binarysensor.yaml").write_text(textwrap.dedent("""
+# ────────────────────────────────────────────────────────────────────────────────
+# binarysensor.yaml
+# - Heat block when outdoor ≥ 20°C (68°F)
+# - Forecast hot day / cold night triggers (for pre-conditioning)
+# ────────────────────────────────────────────────────────────────────────────────
+
+- platform: template
+  sensors:
+    heat_blocked_over_68f:
+      friendly_name: "Heat Blocked (Outdoor ≥ 68°F)"
+      device_class: cold
+      value_template: "{{ states('sensor.outdoor_temperature_owm') | float(20) >= 20 }}"
+
+    forecast_hot_today_30c:
+      friendly_name: "Forecast Hot Today (≥ 30°C)"
+      value_template: >-
+        {% set f = state_attr('weather.home','forecast') %}
+        {% if f %}
+          {% set temps = f | map(attribute='temperature') | list %}
+          {{ temps and (temps | max) >= 30 }}
+        {% else %} false {% endif %}
+
+    forecast_cold_tonight_5c:
+      friendly_name: "Forecast Cold Tonight (≤ 5°C)"
+      value_template: >-
+        {% set f = state_attr('weather.home','forecast') %}
+        {% if f %}
+          {% set temps = f | map(attribute='temperature') | list %}
+          {{ temps and (temps | min) <= 5 }}
+        {% else %} false {% endif %}
+"""))
+
+# derivative.yaml
+(inc / "derivative.yaml").write_text(textwrap.dedent("""
+# ────────────────────────────────────────────────────────────────────────────────
+# derivative.yaml
+# - °C per minute rates for each key temperature
+# ────────────────────────────────────────────────────────────────────────────────
+
+- platform: derivative
+  name: "Outdoor Temperature Rate"
+  source: sensor.outdoor_temperature_owm
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Kitchen Temperature Rate"
+  source: sensor.kitchen_temperature
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Dining Room Temperature Rate"
+  source: sensor.dining_room_temperature
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Living Room Temperature Rate"
+  source: sensor.living_room_temperature
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Master Bedroom Temperature Rate"
+  source: sensor.master_bedroom_average_temperature
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Middle Room Temperature Rate"
+  source: sensor.middle_room_temperature
+  unit_time: min
+  time_window: "00:30:00"
+
+- platform: derivative
+  name: "Spare Room Temperature Rate"
+  source: sensor.spare_room_temperature
+  unit_time: min
+  time_window: "00:30:00"
+"""))
+
+# automations.yaml (controller)
+(base / "automations.yaml").write_text(textwrap.dedent("""
+# ────────────────────────────────────────────────────────────────────────────────
+# Smart HVAC (Tight Band + Dewpoint + Forecast + Quiet Hours + Heat Block)
+# Runs every 5 minutes
+# ────────────────────────────────────────────────────────────────────────────────
+- id: smart_hvac_tight_band
+  alias: Smart HVAC (Tight Band + Dewpoint + Forecast)
+  mode: queued
+  max: 10
+
+  trigger:
+    - platform: time_pattern
+      minutes: "/5"
+
+  condition:
+    - condition: state
+      entity_id: switch.hvac_ai_on_off
+      state: "on"
+
+  action:
+    - variables:
+        outdoor_c: "{{ states('sensor.outdoor_temperature_owm') | float(20) }}"
+        cloud_pct: "{{ states('sensor.cloud_coverage_owm') | float(50) }}"
+        out_hum:   "{{ states('sensor.humidity_owm') | float(50) }}"
+        out_cond:  "{{ states('sensor.outdoor_condition_owm') | default('clear') }}"
+
+        is_morning: "{{ 9 <= now().hour <= 11 }}"
+        quiet_hours: "{{ now().hour >= 22 or now().hour < 7 }}"
+
+        Z1_HEAT: "{{ states('input_number.zone1_heat_set_c') | float(20.0) }}"
+        Z1_COOL: "{{ states('input_number.zone1_cool_set_c') | float(24.0) }}"
+        Z2_HEAT: "{{ states('input_number.zone2_heat_set_c') | float(19.5) }}"
+        Z2_COOL: "{{ states('input_number.zone2_cool_set_c') | float(23.5) }}"
+
+        Z1_COOL_EFF: >-
+          {% set adj = -0.5 if (is_morning | bool) and is_state('binary_sensor.forecast_hot_today_30c','on') else 0 %}
+          {{ (states('input_number.zone1_cool_set_c') | float(24.0)) + adj }}
+        Z2_HEAT_EFF: >-
+          {% set hr = now().hour %}
+          {% set adj = 0.5 if (20 <= hr <= 22) and is_state('binary_sensor.forecast_cold_tonight_5c','on') else 0 %}
+          {{ (states('input_number.zone2_heat_set_c') | float(19.5)) + adj }}
+
+        HYST: 0.3
+        RISE_FAST: 0.05
+        FALL_FAST: -0.05
+        MIN_MODE_INTERVAL_S: 600
+
+        heat_allowed: "{{ not is_state('binary_sensor.heat_blocked_over_68f','on') }}"
+
+        k_temp: "{{ states('sensor.kitchen_temperature') | float(21) }}"
+        d_temp: "{{ states('sensor.dining_room_temperature') | float(21) }}"
+        l_temp: "{{ states('sensor.living_room_temperature') | float(21) }}"
+        k_avg:  "{{ states('sensor.kitchen_temperature_trend') | float(21) }}"
+        d_avg:  "{{ states('sensor.dining_room_temperature_trend') | float(21) }}"
+        l_avg:  "{{ states('sensor.living_room_temperature_trend') | float(21) }}"
+        k_hum:  "{{ states('sensor.kitchen_humidity') | float(50) }}"
+        din_hum:"{{ states('sensor.dining_room_humidity') | float(50) }}"
+        l_hum:  "{{ states('sensor.living_room_humidity') | float(50) }}"
+        k_d:    "{{ states('sensor.kitchen_temperature_rate') | float(0) }}"
+        din_d:  "{{ states('sensor.dining_room_temperature_rate') | float(0) }}"
+        l_d:    "{{ states('sensor.living_room_temperature_rate') | float(0) }}"
+        z1_dew: "{{ states('sensor.zone1_dew_point_c') | float(12) }}"
+
+        m_temp:   "{{ states('sensor.master_bedroom_average_temperature') | float(21) }}"
+        mid_temp: "{{ states('sensor.middle_room_temperature') | float(21) }}"
+        s_temp:   "{{ states('sensor.spare_room_temperature') | float(21) }}"
+        m_avg:    "{{ states('sensor.master_bedroom_temperature_trend') | float(21) }}"
+        mid_avg:  "{{ states('sensor.middle_room_temperature_trend') | float(21) }}"
+        s_avg:    "{{ states('sensor.spare_room_temperature_trend') | float(21) }}"
+        m_hum:    "{{ states('sensor.master_bedroom_humidity') | float(50) }}"
+        mid_hum:  "{{ states('sensor.middle_room_humidity') | float(50) }}"
+        s_hum:    "{{ states('sensor.spare_room_humidity') | float(50) }}"
+        m_d:      "{{ states('sensor.master_bedroom_temperature_rate') | float(0) }}"
+        mid_d:    "{{ states('sensor.middle_room_temperature_rate') | float(0) }}"
+        s_d:      "{{ states('sensor.spare_room_temperature_rate') | float(0) }}"
+        z2_dew:   "{{ states('sensor.zone2_dew_point_c') | float(12) }}"
+
+        z1_can_switch: >-
+          {{ (as_timestamp(now()) - as_timestamp(states.climate.esp_entry_hvac_entry_heatpump.last_changed)) > MIN_MODE_INTERVAL_S }}
+        z2_can_switch: >-
+          {{ (as_timestamp(now()) - as_timestamp(states.climate.esp_master_hvac_master_room_heatpump.last_changed)) > MIN_MODE_INTERVAL_S }}
+
+    - variables:
+        z1_too_hot: >-
+          {{ ([k_temp, d_temp, l_temp, k_avg, d_avg, l_avg] | max) > (Z1_COOL_EFF | float + HYST) }}
+        z1_too_cold: >-
+          {{ ([k_temp, d_temp, l_temp, k_avg, d_avg, l_avg] | min) < (Z1_HEAT | float - HYST) }}
+        z1_rising: >-
+          {{ (k_d | float > RISE_FAST) or (din_d | float > RISE_FAST) or (l_d | float > RISE_FAST) }}
+        z1_falling: >-
+          {{ (k_d | float < FALL_FAST) or (din_d | float < FALL_FAST) or (l_d | float < FALL_FAST) }}
+        z1_hum_hi: >-
+          {{ (k_hum | float > 60) or (din_hum | float > 60) or (l_hum | float > 60) }}
+
+        hvac_mode_zone1: >-
+          {% set mode = 'fan_only' %}
+          {% if z1_hum_hi and (z1_dew | float >= 18) %}
+            {% set mode = 'dry' %}
+          {% elif z1_too_hot or z1_rising %}
+            {% set mode = 'cool' %}
+          {% elif z1_too_cold or z1_falling %}
+            {% set mode = 'heat' %}
+          {% else %}
+            {% set mode = 'fan_only' %}
+          {% endif %}
+          {% if mode == 'heat' and (not heat_allowed | bool) %}
+            {% set mode = 'fan_only' %}
+          {% endif %}
+          {{ mode }}
+
+    - variables:
+        z2_too_hot: >-
+          {{ ([m_temp, mid_temp, s_temp, m_avg, mid_avg, s_avg] | max) > (Z2_COOL | float + HYST) }}
+        z2_too_cold: >-
+          {{ ([m_temp, mid_temp, s_temp, m_avg, mid_avg, s_avg] | min) < (Z2_HEAT_EFF | float - HYST) }}
+        z2_rising: >-
+          {{ (m_d | float > RISE_FAST) or (mid_d | float > RISE_FAST) or (s_d | float > RISE_FAST) }}
+        z2_falling: >-
+          {{ (m_d | float < FALL_FAST) or (mid_d | float < FALL_FAST) or (s_d | float < FALL_FAST) }}
+        z2_hum_hi: >-
+          {{ (m_hum | float > 60) or (mid_hum | float > 60) or (s_hum | float > 60) }}
+
+        hvac_mode_zone2: >-
+          {% set mode = 'fan_only' %}
+          {% if z2_hum_hi and (z2_dew | float >= 18) %}
+            {% set mode = 'dry' %}
+          {% elif z2_too_hot or z2_rising %}
+            {% set mode = 'cool' %}
+          {% elif z2_too_cold or z2_falling %}
+            {% set mode = 'heat' %}
+          {% else %}
+            {% set mode = 'fan_only' %}
+          {% endif %}
+          {% if mode == 'heat' and (not heat_allowed | bool) %}
+            {% set mode = 'fan_only' %}
+          {% endif %}
+          {{ mode }}
+
+    - variables:
+        hvac_mode_zone1_final: >-
+          {% set current = state_attr('climate.esp_entry_hvac_entry_heatpump','hvac_mode') or
+                           states('climate.esp_entry_hvac_entry_heatpump') %}
+          {{ hvac_mode_zone1 if (z1_can_switch | bool) else current }}
+
+        hvac_mode_zone2_final: >-
+          {% set current = state_attr('climate.esp_master_hvac_master_room_heatpump','hvac_mode') or
+                           states('climate.esp_master_hvac_master_room_heatpump') %}
+          {{ hvac_mode_zone2 if (z2_can_switch | bool) else current }}
+
+    - service: climate.set_hvac_mode
+      target:
+        entity_id:
+          - climate.esp_entry_hvac_entry_heatpump
+          - climate.esp_livingroom_hvac_living_room_heatpump
+      data:
+        hvac_mode: "{{ hvac_mode_zone1_final }}"
+      continue_on_error: true
+
+    - service: climate.set_hvac_mode
+      target:
+        entity_id:
+          - climate.esp_master_hvac_master_room_heatpump
+          - climate.esp_middleroom_hvac_middle_room_heatpump_3
+          - climate.spare_room_heatpump
+      data:
+        hvac_mode: "{{ hvac_mode_zone2_final }}"
+      continue_on_error: true
+
+    - variables:
+        fan_speed_zone1: >-
+          {% if z1_too_hot or z1_rising %}high
+          {% elif z1_too_cold or z1_falling %}medium
+          {% else %}auto
+          {% endif %}
+
+        fan_speed_master: >-
+          {% if quiet_hours | bool %}
+            {% if m_d | float > RISE_FAST %}medium
+            {% elif m_d | float < FALL_FAST %}low
+            {% else %}auto
+            {% endif %}
+          {% else %}
+            {% if m_d | float > RISE_FAST %}high
+            {% elif m_d | float < FALL_FAST %}medium
+            {% else %}auto
+            {% endif %}
+          {% endif %}
+        fan_speed_middle: >-
+          {% if quiet_hours | bool %}
+            {% if mid_d | float > RISE_FAST %}medium
+            {% elif mid_d | float < FALL_FAST %}low
+            {% else %}auto
+            {% endif %}
+          {% else %}
+            {% if mid_d | float > RISE_FAST %}high
+            {% elif mid_d | float < FALL_FAST %}medium
+            {% else %}auto
+            {% endif %}
+          {% endif %}
+        fan_speed_spare: >-
+          {% if quiet_hours | bool %}
+            {% if s_d | float > RISE_FAST %}medium
+            {% elif s_d | float < FALL_FAST %}low
+            {% else %}auto
+            {% endif %}
+          {% else %}
+            {% if s_d | float > RISE_FAST %}high
+            {% elif s_d | float < FALL_FAST %}medium
+            {% else %}auto
+            {% endif %}
+          {% endif %}
+
+    - service: climate.set_fan_mode
+      target:
+        entity_id:
+          - climate.esp_entry_hvac_entry_heatpump
+          - climate.esp_livingroom_hvac_living_room_heatpump
+      data:
+        fan_mode: "{{ fan_speed_zone1 }}"
+      continue_on_error: true
+
+    - service: climate.set_fan_mode
+      target:
+        entity_id: climate.esp_master_hvac_master_room_heatpump
+      data:
+        fan_mode: "{{ fan_speed_master }}"
+      continue_on_error: true
+
+    - service: climate.set_fan_mode
+      target:
+        entity_id: climate.esp_middleroom_hvac_middle_room_heatpump_3
+      data:
+        fan_mode: "{{ fan_speed_middle }}"
+      continue_on_error: true
+
+    - service: climate.set_fan_mode
+      target:
+        entity_id: climate.spare_room_heatpump
+      data:
+        fan_mode: "{{ fan_speed_spare }}"
+      continue_on_error: true
+
+    - service: system_log.write
+      data:
+        level: info
+        message: >-
+          HVAC Update:
+          Z1={{ hvac_mode_zone1_final }} (fan {{ fan_speed_zone1 }}; effCool={{ Z1_COOL_EFF }}°C ({{ (Z1_COOL_EFF|float*1.8+32)|round(1) }}°F),
+          heat={{ Z1_HEAT }}°C ({{ (Z1_HEAT|float*1.8+32)|round(1) }}°F)),
+          Z2={{ hvac_mode_zone2_final }} (fans M/{{ fan_speed_master }}, Mi/{{ fan_speed_middle }}, S/{{ fan_speed_spare }};
+          effHeat={{ Z2_HEAT_EFF }}°C ({{ (Z2_HEAT_EFF|float*1.8+32)|round(1) }}°F),
+          cool={{ Z2_COOL }}°C ({{ (Z2_COOL|float*1.8+32)|round(1) }}°F)),
+          DewPts: Z1={{ z1_dew }}°C ({{ (z1_dew|float*1.8+32)|round(1) }}°F), Z2={{ z2_dew }}°C ({{ (z2_dew|float*1.8+32)|round(1) }}°F);
+          Outdoor={{ outdoor_c }}°C ({{ (outdoor_c*1.8+32)|round(1) }}°F) HeatAllowed={{ heat_allowed }}
+"""))
+
+# README
+(base / "README.md").write_text(readme)
+
+# Zip the repo for one-click download
+zip_path = Path("/mnt/data/hvac_ha_repo.zip")
+with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+    for p in base.rglob("*"):
+        z.write(p, p.relative_to(base.parent))
+
+str(zip_path)
